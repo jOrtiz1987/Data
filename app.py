@@ -6,6 +6,8 @@ from typing import Optional, List
 from analytics_core import generate_report
 
 app = FastAPI()
+# el root_path se comenta para que corra en local
+root_path="/apiiaturistica"
 
 API_KEY = os.getenv("ANALYTICS_API_KEY", "dev-key")
 REPORTS_DIR = os.path.abspath(os.getenv("REPORTS_DIR", "./reports"))

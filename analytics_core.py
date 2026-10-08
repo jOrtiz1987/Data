@@ -199,8 +199,8 @@ def generate_report(conn_params: dict, reports_dir: str,
         t_end = pd.Timestamp(t)
         t_start = t_end - lookback
 
-        idx_start = np.searchsorted(times, t_start)
-        idx_end = np.searchsorted(times, t_end, side='right')
+        idx_start = np.searchsorted(times, np.datetime64(t_start))
+        idx_end = np.searchsorted(times, np.datetime64(t_end), side='right')
 
         if idx_start >= len(times) or idx_start == idx_end:
             rows.append({**v.to_dict(),
@@ -252,8 +252,8 @@ def generate_report(conn_params: dict, reports_dir: str,
         t_start = pd.Timestamp(t)
         t_end = t_start + pd.Timedelta(hours=3)
         
-        idx_start = np.searchsorted(times, t_start)
-        idx_end = np.searchsorted(times, t_end)
+        idx_start = np.searchsorted(times, np.datetime64(t_start))
+        idx_end = np.searchsorted(times, np.datetime64(t_end))
         
         if idx_start >= len(times) or idx_start == idx_end:
             stay_durations.append(0.0)

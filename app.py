@@ -5,9 +5,12 @@ from pydantic import BaseModel
 from typing import Optional, List
 from analytics_core import generate_report
 
-app = FastAPI()
-# el root_path se comenta para que corra en local
-root_path="/apiiaturistica"
+# el root_path se usa para Nginx en produccion
+app = FastAPI(root_path="/apiiaturistica")
+
+@app.get("/")
+def read_root():
+    return {"status": "ok", "message": "Data API is running"}
 
 API_KEY = os.getenv("ANALYTICS_API_KEY", "dev-key")
 REPORTS_DIR = os.path.abspath(os.getenv("REPORTS_DIR", "./reports"))

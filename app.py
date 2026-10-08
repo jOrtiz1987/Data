@@ -3,7 +3,15 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
-from analytics_core import generate_report
+from analytics_core import (
+    generate_report, 
+    train_recommendation_model, 
+    predict_next_monument,
+    train_profile_model,
+    predict_tourist_profile,
+    train_budget_model,
+    predict_tourist_budget
+)
 
 # el root_path se usa para Nginx en produccion
 app = FastAPI(root_path="/apiiaturistica")
@@ -91,3 +99,49 @@ def download_clusters(report_id: str, x_api_key: str = Header(default="")):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Not found")
     return FileResponse(path, filename="mapa_clusters_global.html", media_type="text/html")
+
+@app.post("/recommend/train")
+def train_model(x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = train_recommendation_model(conn_params)
+    return {"status": "SUCCESS", "detail": res}
+
+class PredictRequest(BaseModel):
+    userId: int
+    currentPoiId: int
+
+@app.post("/recommend/next")
+def predict_next(req: PredictRequest, x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = predict_next_monument(conn_params, req.userId, req.currentPoiId)
+    return res
+
+class ProfileRequest(BaseModel):
+    userId: int
+
+@app.post("/recommend/profile/train")
+def train_profile(x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = train_profile_model(conn_params)
+    return {"status": "SUCCESS", "detail": res}
+
+@app.post("/recommend/profile")
+def predict_profile(req: ProfileRequest, x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = predict_tourist_profile(conn_params, req.userId)
+    return res
+
+class BudgetRequest(BaseModel):
+    userId: int
+
+@app.post("/recommend/budget/train")
+def train_budget(x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = train_budget_model(conn_params)
+    return {"status": "SUCCESS", "detail": res}
+
+@app.post("/recommend/budget")
+def predict_budget(req: BudgetRequest, x_api_key: str = Header(default="")):
+    _auth(x_api_key)
+    res = predict_tourist_budget(conn_params, req.userId)
+    return res

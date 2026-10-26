@@ -480,77 +480,88 @@ def predict_next_monument(conn_params: dict, user_id: int, current_poi_id: int, 
     import pickle
     import os
     
-    # Si el modelo no existe, entrenarlo primero
-    if not os.path.exists(model_path):
-        train_recommendation_model(conn_params, model_path)
-        
     try:
-        with open(model_path, "rb") as f:
-            model_data = pickle.load(f)
-    except Exception:
-        # Fallback si falla cargar
-        return {"recommended_poi_id": 1, "status": "fallback"}
+        # Si el modelo no existe, entrenarlo primero
+        if not os.path.exists(model_path):
+            train_recommendation_model(conn_params, model_path)
+            
+        try:
+            with open(model_path, "rb") as f:
+                model_data = pickle.load(f)
+        except Exception:
+            # Fallback si falla cargar
+            return {"recommended_poi_id": 1, "top_recommendations": [], "status": "fallback"}
+            
+        clf = model_data["model"]
+        scaler = model_data.get("scaler")
+        mean_budget = model_data.get("mean_budget", 5000.0)
         
-    clf = model_data["model"]
-    scaler = model_data.get("scaler")
-    mean_budget = model_data["mean_budget"]
-    
-    # Obtener perfil del usuario
-    q_user = f"""
-        SELECT u.genero, u.fechaDeNacimiento, pv.presupuesto
-        FROM Usuario u
-        LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
-        WHERE u.idUsuario = {user_id}
-        LIMIT 1;
-    """
-    df_user = mysql_read(conn_params, q_user)
-    
-    if df_user.empty:
-        # Si el usuario es nuevo, usar promedio de edad y presupuesto por defecto
-        edad = 35.0
-        genero_num = 0
-        presupuesto = mean_budget
-    else:
-        user_row = df_user.iloc[0]
-        birth_year = pd.to_datetime(user_row["fechaDeNacimiento"], errors="coerce").year
-        edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
-        genero_num = 1 if str(user_row["genero"]).lower().startswith('f') else 0
-        presupuesto = user_row["presupuesto"] if not pd.isna(user_row["presupuesto"]) else mean_budget
+        # Obtener perfil del usuario
+        q_user = f"""
+            SELECT u.genero, u.fechaDeNacimiento, pv.presupuesto
+            FROM Usuario u
+            LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
+            WHERE u.idUsuario = {user_id}
+            LIMIT 1;
+        """
+        df_user = mysql_read(conn_params, q_user)
         
-    # Construir feature vector
-    features = [[
-        float(edad),
-        float(genero_num),
-        float(presupuesto),
-        float(current_poi_id)
-    ]]
-    
-    if scaler:
-        features = scaler.transform(features)
+        if df_user.empty:
+            # Si el usuario es nuevo, usar promedio de edad y presupuesto por defecto
+            edad = 35.0
+            genero_num = 0
+            presupuesto = mean_budget
+        else:
+            user_row = df_user.iloc[0]
+            birth_year = pd.to_datetime(user_row["fechaDeNacimiento"], errors="coerce").year
+            edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
+            genero_num = 1 if str(user_row["genero"]).lower().startswith('f') else 0
+            presupuesto = user_row["presupuesto"] if not pd.isna(user_row["presupuesto"]) else mean_budget
+            
+        # Construir feature vector
+        features = [[
+            float(edad),
+            float(genero_num),
+            float(presupuesto),
+            float(current_poi_id)
+        ]]
         
-    # Realizar predicción con la red neuronal
-    pred_class = int(clf.predict(features)[0])
-    
-    # Obtener probabilidades
-    probs = clf.predict_proba(features)[0]
-    classes = model_data["classes"]
-    
-    # Crear un diccionario de probabilidades para las 3 mejores opciones
-    top_3_indices = probs.argsort()[-3:][::-1]
-    recommendations = []
-    for idx in top_3_indices:
-        recommendations.append({
-            "poi_id": int(classes[idx]),
-            "probability": float(probs[idx])
-        })
+        if scaler:
+            features = scaler.transform(features)
+            
+        # Realizar predicción con la red neuronal
+        pred_class = int(clf.predict(features)[0])
         
-    return {
-        "user_id": user_id,
-        "current_poi_id": current_poi_id,
-        "recommended_poi_id": pred_class,
-        "top_recommendations": recommendations,
-        "status": "success"
-    }
+        # Obtener probabilidades
+        probs = clf.predict_proba(features)[0]
+        classes = model_data["classes"]
+        
+        # Crear un diccionario de probabilidades para las 3 mejores opciones
+        top_3_indices = probs.argsort()[-3:][::-1]
+        recommendations = []
+        for idx in top_3_indices:
+            recommendations.append({
+                "poi_id": int(classes[idx]),
+                "probability": float(probs[idx])
+            })
+            
+        return {
+            "user_id": user_id,
+            "current_poi_id": current_poi_id,
+            "recommended_poi_id": pred_class,
+            "top_recommendations": recommendations,
+            "status": "success"
+        }
+    except Exception as e:
+        print(f"Error en predict_next_monument: {e}")
+        return {
+            "user_id": user_id,
+            "current_poi_id": current_poi_id,
+            "recommended_poi_id": 1,
+            "top_recommendations": [],
+            "status": "fallback",
+            "detail": str(e)
+        }
 
 def train_profile_model(conn_params: dict, model_path: str = "profile_model.pkl"):
     """
@@ -637,83 +648,93 @@ def predict_tourist_profile(conn_params: dict, user_id: int, model_path: str = "
     import pickle
     import os
     
-    if not os.path.exists(model_path):
-        train_profile_model(conn_params, model_path)
-        
     try:
-        with open(model_path, "rb") as f:
-            model_data = pickle.load(f)
-    except Exception:
-        return {"recommended_profile": "Cultural", "status": "fallback"}
+        if not os.path.exists(model_path):
+            train_profile_model(conn_params, model_path)
+            
+        try:
+            with open(model_path, "rb") as f:
+                model_data = pickle.load(f)
+        except Exception:
+            return {"recommended_profile": "Cultural", "top_profiles": [], "status": "fallback"}
+            
+        clf = model_data["model"]
+        scaler = model_data.get("scaler")
+        classes = model_data["classes"]
         
-    clf = model_data["model"]
-    scaler = model_data.get("scaler")
-    classes = model_data["classes"]
-    
-    q_data = f"""
-        SELECT u.genero, u.fechaDeNacimiento,
-               pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal,
-               COUNT(v.idVisita) as total_visitas,
-               SUM(CASE WHEN v.llevaNinos = 1 THEN 1 ELSE 0 END) as total_ninos
-        FROM Usuario u
-        LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
-        LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
-        WHERE u.idUsuario = {user_id}
-        GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal;
-    """
-    df = mysql_read(conn_params, q_data)
-    
-    if df.empty:
-        edad = 35.0
-        genero_num = 0
-        presupuesto = 5000.0
-        duracion = model_data["mean_duracion"]
-        total_visitas = model_data["mean_visitas"]
-        ratio_ninos = model_data["mean_ninos"]
-    else:
-        row = df.iloc[0]
-        birth_year = pd.to_datetime(row["fechaDeNacimiento"], errors="coerce").year
-        edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
-        genero_num = 1 if str(row["genero"]).lower().startswith('f') else 0
-        presupuesto = row["presupuesto"] if not pd.isna(row["presupuesto"]) else 5000.0
+        q_data = f"""
+            SELECT u.genero, u.fechaDeNacimiento,
+                   pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal,
+                   COUNT(v.idVisita) as total_visitas,
+                   SUM(CASE WHEN v.llevaNinos = 1 THEN 1 ELSE 0 END) as total_ninos
+            FROM Usuario u
+            LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
+            LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
+            WHERE u.idUsuario = {user_id}
+            GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal;
+        """
+        df = mysql_read(conn_params, q_data)
         
-        start = pd.to_datetime(row["fechaInicioReal"], errors="coerce")
-        end = pd.to_datetime(row["fechaFinReal"], errors="coerce")
-        duracion = (end - start).total_seconds() / 60.0 if (not pd.isna(start) and not pd.isna(end)) else model_data["mean_duracion"]
-        
-        total_visitas = row["total_visitas"] if not pd.isna(row["total_visitas"]) else 0
-        ratio_ninos = (row["total_ninos"] / total_visitas) if (total_visitas > 0 and not pd.isna(row["total_ninos"])) else 0.0
+        if df.empty:
+            edad = 35.0
+            genero_num = 0
+            presupuesto = 5000.0
+            duracion = model_data.get("mean_duracion", 120.0)
+            total_visitas = model_data.get("mean_visitas", 5)
+            ratio_ninos = model_data.get("mean_ninos", 0.0)
+        else:
+            row = df.iloc[0]
+            birth_year = pd.to_datetime(row["fechaDeNacimiento"], errors="coerce").year
+            edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
+            genero_num = 1 if str(row["genero"]).lower().startswith('f') else 0
+            presupuesto = row["presupuesto"] if not pd.isna(row["presupuesto"]) else 5000.0
+            
+            start = pd.to_datetime(row["fechaInicioReal"], errors="coerce")
+            end = pd.to_datetime(row["fechaFinReal"], errors="coerce")
+            duracion = (end - start).total_seconds() / 60.0 if (not pd.isna(start) and not pd.isna(end)) else model_data.get("mean_duracion", 120.0)
+            
+            total_visitas = row["total_visitas"] if not pd.isna(row["total_visitas"]) else 0
+            ratio_ninos = (row["total_ninos"] / total_visitas) if (total_visitas > 0 and not pd.isna(row["total_ninos"])) else 0.0
 
-    features = [[
-        float(edad),
-        float(genero_num),
-        float(presupuesto),
-        float(duracion),
-        float(total_visitas),
-        float(ratio_ninos)
-    ]]
-    
-    if scaler:
-        features = scaler.transform(features)
+        features = [[
+            float(edad),
+            float(genero_num),
+            float(presupuesto),
+            float(duracion),
+            float(total_visitas),
+            float(ratio_ninos)
+        ]]
         
-    pred_num = int(clf.predict(features)[0])
-    profile_name = classes[pred_num]
-    
-    probs = clf.predict_proba(features)[0]
-    top_recommendations = []
-    for idx, prob in enumerate(probs):
-        top_recommendations.append({
-            "profile": classes[idx],
-            "probability": float(prob)
-        })
-    top_recommendations.sort(key=lambda x: x["probability"], reverse=True)
-    
-    return {
-        "user_id": user_id,
-        "recommended_profile": profile_name,
-        "top_profiles": top_recommendations,
-        "status": "success"
-    }
+        if scaler:
+            features = scaler.transform(features)
+            
+        pred_num = int(clf.predict(features)[0])
+        profile_name = classes[pred_num]
+        
+        probs = clf.predict_proba(features)[0]
+        top_recommendations = []
+        for idx, prob in enumerate(probs):
+            top_recommendations.append({
+                "profile": classes[idx],
+                "probability": float(prob)
+            })
+        top_recommendations.sort(key=lambda x: x["probability"], reverse=True)
+        
+        return {
+            "user_id": user_id,
+            "recommended_profile": profile_name,
+            "top_profiles": top_recommendations,
+            "status": "success"
+        }
+    except Exception as e:
+        print(f"Error en predict_tourist_profile: {e}")
+        return {
+            "user_id": user_id,
+            "recommended_profile": "Cultural",
+            "top_profiles": [],
+            "status": "fallback",
+            "detail": str(e)
+        }
 
 def train_budget_model(conn_params: dict, model_path: str = "budget_model.pkl"):
     """
@@ -782,66 +803,75 @@ def predict_tourist_budget(conn_params: dict, user_id: int, model_path: str = "b
     import pickle
     import os
     
-    if not os.path.exists(model_path):
-        train_budget_model(conn_params, model_path)
-        
     try:
-        with open(model_path, "rb") as f:
-            model_data = pickle.load(f)
-    except Exception:
-        return {"estimated_budget": 5000.0, "status": "fallback"}
+        if not os.path.exists(model_path):
+            train_budget_model(conn_params, model_path)
+            
+        try:
+            with open(model_path, "rb") as f:
+                model_data = pickle.load(f)
+        except Exception:
+            return {"estimated_budget": 5000.0, "status": "fallback"}
+            
+        reg = model_data["model"]
+        scaler = model_data.get("scaler")
         
-    reg = model_data["model"]
-    scaler = model_data.get("scaler")
-    
-    q_data = f"""
-        SELECT u.genero, u.fechaDeNacimiento,
-               pv.fechaInicioReal, pv.fechaFinReal,
-               COUNT(v.idVisita) as total_visitas,
-               SUM(CASE WHEN v.llevaNinos = 1 THEN 1 ELSE 0 END) as total_ninos
-        FROM Usuario u
-        LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
-        LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
-        WHERE u.idUsuario = {user_id}
-        GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.fechaInicioReal, pv.fechaFinReal;
-    """
-    df = mysql_read(conn_params, q_data)
-    
-    if df.empty:
-        edad = 35.0
-        genero_num = 0
-        duracion = model_data["mean_duracion"]
-        total_visitas = model_data["mean_visitas"]
-        ratio_ninos = model_data["mean_ninos"]
-    else:
-        row = df.iloc[0]
-        birth_year = pd.to_datetime(row["fechaDeNacimiento"], errors="coerce").year
-        edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
-        genero_num = 1 if str(row["genero"]).lower().startswith('f') else 0
+        q_data = f"""
+            SELECT u.genero, u.fechaDeNacimiento,
+                   pv.fechaInicioReal, pv.fechaFinReal,
+                   COUNT(v.idVisita) as total_visitas,
+                   SUM(CASE WHEN v.llevaNinos = 1 THEN 1 ELSE 0 END) as total_ninos
+            FROM Usuario u
+            LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
+            LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
+            WHERE u.idUsuario = {user_id}
+            GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.fechaInicioReal, pv.fechaFinReal;
+        """
+        df = mysql_read(conn_params, q_data)
         
-        start = pd.to_datetime(row["fechaInicioReal"], errors="coerce")
-        end = pd.to_datetime(row["fechaFinReal"], errors="coerce")
-        duracion = (end - start).total_seconds() / 60.0 if (not pd.isna(start) and not pd.isna(end)) else model_data["mean_duracion"]
-        
-        total_visitas = row["total_visitas"] if not pd.isna(row["total_visitas"]) else 0
-        ratio_ninos = (row["total_ninos"] / total_visitas) if (total_visitas > 0 and not pd.isna(row["total_ninos"])) else 0.0
+        if df.empty:
+            edad = 35.0
+            genero_num = 0
+            duracion = model_data.get("mean_duracion", 120.0)
+            total_visitas = model_data.get("mean_visitas", 5)
+            ratio_ninos = model_data.get("mean_ninos", 0.0)
+        else:
+            row = df.iloc[0]
+            birth_year = pd.to_datetime(row["fechaDeNacimiento"], errors="coerce").year
+            edad = 2026 - birth_year if not pd.isna(birth_year) else 35.0
+            genero_num = 1 if str(row["genero"]).lower().startswith('f') else 0
+            
+            start = pd.to_datetime(row["fechaInicioReal"], errors="coerce")
+            end = pd.to_datetime(row["fechaFinReal"], errors="coerce")
+            duracion = (end - start).total_seconds() / 60.0 if (not pd.isna(start) and not pd.isna(end)) else model_data.get("mean_duracion", 120.0)
+            
+            total_visitas = row["total_visitas"] if not pd.isna(row["total_visitas"]) else 0
+            ratio_ninos = (row["total_ninos"] / total_visitas) if (total_visitas > 0 and not pd.isna(row["total_ninos"])) else 0.0
 
-    features = [[
-        float(edad),
-        float(genero_num),
-        float(duracion),
-        float(total_visitas),
-        float(ratio_ninos)
-    ]]
-    
-    if scaler:
-        features = scaler.transform(features)
+        features = [[
+            float(edad),
+            float(genero_num),
+            float(duracion),
+            float(total_visitas),
+            float(ratio_ninos)
+        ]]
         
-    pred_budget = float(reg.predict(features)[0])
-    pred_budget = max(500.0, pred_budget)
-    
-    return {
-        "user_id": user_id,
-        "estimated_budget": pred_budget,
-        "status": "success"
-    }
+        if scaler:
+            features = scaler.transform(features)
+            
+        pred_budget = float(reg.predict(features)[0])
+        pred_budget = max(500.0, pred_budget)
+        
+        return {
+            "user_id": user_id,
+            "estimated_budget": pred_budget,
+            "status": "success"
+        }
+    except Exception as e:
+        print(f"Error en predict_tourist_budget: {e}")
+        return {
+            "user_id": user_id,
+            "estimated_budget": 5000.0,
+            "status": "fallback",
+            "detail": str(e)
+        }

@@ -38,10 +38,12 @@ def mysql_read(conn_params, query: str, params=None) -> pd.DataFrame:
 def make_base_map(df_):
     center_lat = float(df_["lat"].mean())
     center_lon = float(df_["lon"].mean())
-    # Fondo de CartoDB: los mosaicos de OpenStreetMap se bloquean (403) cuando el mapa se
-    # muestra desde un blob en un iframe aislado, porque no se envía el sitio de origen.
+    # Fondo de Esri (ArcGIS, uso académico/no comercial). OpenStreetMap y CARTO bloquean los
+    # mosaicos cuando el mapa se muestra desde un blob en un iframe aislado, porque no se
+    # envía el sitio de origen; el servicio público de Esri no lo exige.
     return folium.Map(location=[center_lat, center_lon], zoom_start=12, control_scale=True,
-                      tiles="CartoDB positron")
+                      tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+                      attr="Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors")
 
 def build_maps(df, outdir, global_clusters_df, sample_points=500):
     """

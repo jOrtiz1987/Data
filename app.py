@@ -1,4 +1,6 @@
 import os
+import re
+import hmac
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -20,20 +22,29 @@ app = FastAPI(root_path="/apiiaturistica")
 def read_root():
     return {"status": "ok", "message": "Data API is running"}
 
-API_KEY = os.getenv("ANALYTICS_API_KEY", "dev-key")
+def _env_obligatoria(nombre: str) -> str:
+    """Las credenciales se pasan como variables de entorno (docker-compose); no van en el código."""
+    valor = os.getenv(nombre)
+    if not valor:
+        raise RuntimeError(f"Falta la variable de entorno {nombre}")
+    return valor
+
+API_KEY = _env_obligatoria("ANALYTICS_API_KEY")
 REPORTS_DIR = os.path.abspath(os.getenv("REPORTS_DIR", "./reports"))
 
 MYSQL_HOST = os.getenv("MYSQL_HOST", "127.0.0.1")
 MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_DB   = os.getenv("MYSQL_DB", "mydb")
-MYSQL_USER = os.getenv("MYSQL_USER", "jorge")
-MYSQL_PASS = os.getenv("MYSQL_PASS", "ChamaPel0n")
+MYSQL_USER = _env_obligatoria("MYSQL_USER")
+MYSQL_PASS = _env_obligatoria("MYSQL_PASS")
 
 conn_params = dict(
     host=MYSQL_HOST, port=MYSQL_PORT,
     user=MYSQL_USER, password=MYSQL_PASS,
     database=MYSQL_DB, charset="utf8mb4"
 )
+
+REPORT_ID_RE = re.compile(r"[a-f0-9-]{1,36}")
 
 class ReportRequest(BaseModel):
     userIds: Optional[List[int]] = None
@@ -45,14 +56,24 @@ class ReportRequest(BaseModel):
     visitaLookbackMin: int = 30
 
 def _auth(x_api_key: str):
-    if x_api_key != API_KEY:
+    if not hmac.compare_digest(x_api_key or "", API_KEY):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+def _ruta_reporte(report_id: str, archivo: str) -> str:
+    # report_id = primeros 10 caracteres de un UUID; se valida para impedir salir de REPORTS_DIR
+    if not REPORT_ID_RE.fullmatch(report_id or ""):
+        raise HTTPException(status_code=400, detail="reportId inválido")
+    path = os.path.abspath(os.path.join(REPORTS_DIR, report_id, archivo))
+    if not path.startswith(REPORTS_DIR + os.sep) or not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Not found")
+    return path
 
 @app.post("/reports/generate")
 def generate(req: ReportRequest, x_api_key: str = Header(default="")):
     _auth(x_api_key)
 
-    summary, report_id, xlsx_path, maps = generate_report(
+    try:
+        summary, report_id, xlsx_path, maps = generate_report(
         conn_params=conn_params,
         reports_dir=REPORTS_DIR,
         user_ids=req.userIds,
@@ -62,7 +83,9 @@ def generate(req: ReportRequest, x_api_key: str = Header(default="")):
         min_samples=req.minSamples,
         poi_radius_m=req.poiRadiusM,
         visita_lookback_min=req.visitaLookbackMin
-    )
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Mantengo tu campo "download" original para Excel (compatibilidad)
     return {
@@ -79,25 +102,19 @@ def generate(req: ReportRequest, x_api_key: str = Header(default="")):
 @app.get("/reports/{report_id}/excel")
 def download_excel(report_id: str, x_api_key: str = Header(default="")):
     _auth(x_api_key)
-    path = os.path.join(REPORTS_DIR, report_id, "reporte.xlsx")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Not found")
+    path = _ruta_reporte(report_id, "reporte.xlsx")
     return FileResponse(path, filename="reporte.xlsx")
 
 @app.get("/reports/{report_id}/heatmap")
 def download_heatmap(report_id: str, x_api_key: str = Header(default="")):
     _auth(x_api_key)
-    path = os.path.join(REPORTS_DIR, report_id, "mapa_heatmap.html")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Not found")
+    path = _ruta_reporte(report_id, "mapa_heatmap.html")
     return FileResponse(path, filename="mapa_heatmap.html", media_type="text/html")
 
 @app.get("/reports/{report_id}/clusters")
 def download_clusters(report_id: str, x_api_key: str = Header(default="")):
     _auth(x_api_key)
-    path = os.path.join(REPORTS_DIR, report_id, "mapa_clusters_global.html")
-    if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Not found")
+    path = _ruta_reporte(report_id, "mapa_clusters_global.html")
     return FileResponse(path, filename="mapa_clusters_global.html", media_type="text/html")
 
 @app.post("/recommend/train")

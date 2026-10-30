@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pymysql
+pandas
+numpy
+scikit-learn
+folium
+openpyxl
+cryptography

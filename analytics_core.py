@@ -26,10 +26,12 @@ def dbscan_geo(lat, lon, eps_m=120, min_samples=15):
     model = DBSCAN(eps=eps_rad, min_samples=min_samples, metric="haversine")
     return model.fit_predict(coords)
 
-def mysql_read(conn_params, query: str) -> pd.DataFrame:
+def mysql_read(conn_params, query: str, params=None) -> pd.DataFrame:
+    """Ejecuta una consulta. Los valores variables SIEMPRE van en params (marcadores %s),
+    nunca concatenados en el texto SQL, para evitar inyección SQL."""
     conn = pymysql.connect(**conn_params)
     try:
-        return pd.read_sql(query, conn)
+        return pd.read_sql(query, conn, params=params)
     finally:
         conn.close()
 
@@ -98,11 +100,20 @@ def generate_report(conn_params: dict, reports_dir: str,
     os.makedirs(outdir, exist_ok=True)
 
     where = []
+    params = []
     if start and end:
-        where.append(f"rc.fecha BETWEEN '{start}' AND '{end}'")
+        # Las fechas se validan y se pasan como parámetros (antes se concatenaban: inyección SQL)
+        try:
+            start_dt = pd.to_datetime(start)
+            end_dt = pd.to_datetime(end)
+        except (ValueError, TypeError):
+            raise ValueError("Fechas inválidas: use el formato AAAA-MM-DD")
+        where.append("rc.fecha BETWEEN %s AND %s")
+        params += [start_dt.strftime("%Y-%m-%d %H:%M:%S"), end_dt.strftime("%Y-%m-%d %H:%M:%S")]
     if user_ids:
-        ids = ",".join(str(int(x)) for x in user_ids)
-        where.append(f"rc.idUsuario IN ({ids})")
+        ids = [int(x) for x in user_ids]
+        where.append("rc.idUsuario IN (" + ",".join(["%s"] * len(ids)) + ")")
+        params += ids
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
     q_pings = f"""
@@ -136,7 +147,7 @@ def generate_report(conn_params: dict, reports_dir: str,
       ORDER BY v.idUsuario, v.fecha;
     """
 
-    df = mysql_read(conn_params, q_pings)
+    df = mysql_read(conn_params, q_pings, params=params or None)
     pois = mysql_read(conn_params, q_pois)
     vis = mysql_read(conn_params, q_vis)
 
@@ -497,14 +508,14 @@ def predict_next_monument(conn_params: dict, user_id: int, current_poi_id: int, 
         mean_budget = model_data.get("mean_budget", 5000.0)
         
         # Obtener perfil del usuario
-        q_user = f"""
+        q_user = """
             SELECT u.genero, u.fechaDeNacimiento, pv.presupuesto
             FROM Usuario u
             LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
-            WHERE u.idUsuario = {user_id}
+            WHERE u.idUsuario = %s
             LIMIT 1;
         """
-        df_user = mysql_read(conn_params, q_user)
+        df_user = mysql_read(conn_params, q_user, params=(int(user_id),))
         
         if df_user.empty:
             # Si el usuario es nuevo, usar promedio de edad y presupuesto por defecto
@@ -662,7 +673,7 @@ def predict_tourist_profile(conn_params: dict, user_id: int, model_path: str = "
         scaler = model_data.get("scaler")
         classes = model_data["classes"]
         
-        q_data = f"""
+        q_data = """
             SELECT u.genero, u.fechaDeNacimiento,
                    pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal,
                    COUNT(v.idVisita) as total_visitas,
@@ -670,10 +681,10 @@ def predict_tourist_profile(conn_params: dict, user_id: int, model_path: str = "
             FROM Usuario u
             LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
             LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
-            WHERE u.idUsuario = {user_id}
+            WHERE u.idUsuario = %s
             GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.presupuesto, pv.fechaInicioReal, pv.fechaFinReal;
         """
-        df = mysql_read(conn_params, q_data)
+        df = mysql_read(conn_params, q_data, params=(int(user_id),))
         
         if df.empty:
             edad = 35.0
@@ -816,7 +827,7 @@ def predict_tourist_budget(conn_params: dict, user_id: int, model_path: str = "b
         reg = model_data["model"]
         scaler = model_data.get("scaler")
         
-        q_data = f"""
+        q_data = """
             SELECT u.genero, u.fechaDeNacimiento,
                    pv.fechaInicioReal, pv.fechaFinReal,
                    COUNT(v.idVisita) as total_visitas,
@@ -824,10 +835,10 @@ def predict_tourist_budget(conn_params: dict, user_id: int, model_path: str = "b
             FROM Usuario u
             LEFT JOIN PeriodoVacacional pv ON pv.idUsuario = u.idUsuario
             LEFT JOIN Visita v ON v.idUsuario = u.idUsuario
-            WHERE u.idUsuario = {user_id}
+            WHERE u.idUsuario = %s
             GROUP BY u.idUsuario, u.genero, u.fechaDeNacimiento, pv.fechaInicioReal, pv.fechaFinReal;
         """
-        df = mysql_read(conn_params, q_data)
+        df = mysql_read(conn_params, q_data, params=(int(user_id),))
         
         if df.empty:
             edad = 35.0

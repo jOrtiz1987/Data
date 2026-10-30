@@ -38,7 +38,10 @@ def mysql_read(conn_params, query: str, params=None) -> pd.DataFrame:
 def make_base_map(df_):
     center_lat = float(df_["lat"].mean())
     center_lon = float(df_["lon"].mean())
-    return folium.Map(location=[center_lat, center_lon], zoom_start=12, control_scale=True)
+    # Fondo de CartoDB: los mosaicos de OpenStreetMap se bloquean (403) cuando el mapa se
+    # muestra desde un blob en un iframe aislado, porque no se envía el sitio de origen.
+    return folium.Map(location=[center_lat, center_lon], zoom_start=12, control_scale=True,
+                      tiles="CartoDB positron")
 
 def build_maps(df, outdir, global_clusters_df, sample_points=500):
     """
